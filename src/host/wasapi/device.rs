@@ -15,15 +15,19 @@ use std::os::windows::ffi::OsStringExt;
 use std::ptr;
 use std::slice;
 use std::sync::{Arc, Mutex, MutexGuard};
+use windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY;
 
 use super::com;
 use super::{windows_err_to_cpal_err, windows_err_to_cpal_err_message};
 use std::ffi::c_void;
-use windows::core::Interface;
 use windows::core::GUID;
+use windows::core::{implement, Interface, PCWSTR};
 use windows::Win32::Devices::Properties;
 use windows::Win32::Foundation;
-use windows::Win32::Media::Audio::IAudioRenderClient;
+use windows::Win32::Media::Audio::{
+    EDataFlow, ERole, IAudioRenderClient, IMMNotificationClient,
+    IMMNotificationClient_Impl,
+};
 use windows::Win32::Media::{Audio, KernelStreaming, Multimedia};
 use windows::Win32::System::Com;
 use windows::Win32::System::Com::StructuredStorage;
@@ -49,6 +53,8 @@ pub struct Device {
     /// We cache an uninitialized `IAudioClient` so that we can call functions from it without
     /// having to create/destroy audio clients all the time.
     future_audio_client: Arc<Mutex<Option<IAudioClientWrapper>>>, // TODO: add NonZero around the ptr
+    /// If `is_default` is true, when the selected Windows audio device changes, it will use the new device
+    is_default: bool,
 }
 
 impl DeviceTrait for Device {
@@ -371,10 +377,11 @@ impl Device {
     }
 
     #[inline]
-    fn from_immdevice(device: Audio::IMMDevice) -> Self {
+    fn from_immdevice(device: Audio::IMMDevice, is_default: bool) -> Self {
         Device {
             device,
             future_audio_client: Arc::new(Mutex::new(None)),
+            is_default,
         }
     }
 
@@ -963,7 +970,7 @@ impl Iterator for Devices {
         unsafe {
             let device = self.collection.Item(self.next_item).unwrap();
             self.next_item += 1;
-            Some(Device::from_immdevice(device))
+            Some(Device::from_immdevice(device, false))
         }
     }
 
@@ -975,23 +982,23 @@ impl Iterator for Devices {
     }
 }
 
-fn default_device(data_flow: Audio::EDataFlow) -> Option<Device> {
+fn default_device(data_flow: Audio::EDataFlow, is_default: bool) -> Option<Device> {
     unsafe {
         let device = ENUMERATOR
             .0
             .GetDefaultAudioEndpoint(data_flow, Audio::eConsole)
             .ok()?;
         // TODO: check specifically for `E_NOTFOUND`, and panic otherwise
-        Some(Device::from_immdevice(device))
+        Some(Device::from_immdevice(device, is_default))
     }
 }
 
 pub fn default_input_device() -> Option<Device> {
-    default_device(Audio::eCapture)
+    default_device(Audio::eCapture, false) // TODO: Currently input device will not respect Windows audio device selection
 }
 
 pub fn default_output_device() -> Option<Device> {
-    default_device(Audio::eRender)
+    default_device(Audio::eRender, true)
 }
 
 /// Get the audio clock used to produce `StreamInstant`s.
@@ -1071,4 +1078,45 @@ fn buffer_size_to_duration(buffer_size: &BufferSize, sample_rate: u32) -> i64 {
 
 fn buffer_duration_to_frames(buffer_duration: i64, sample_rate: u32) -> FrameCount {
     (buffer_duration * sample_rate as i64 * 100 / 1_000_000_000) as FrameCount
+}
+
+#[implement(IMMNotificationClient)]
+struct DeviceNotificationClient {}
+
+impl IMMNotificationClient_Impl for DeviceNotificationClient {
+    fn OnDeviceStateChanged(
+        &self,
+        pwstrdeviceid: &PCWSTR,
+        dwnewstate: u32,
+    ) -> Result<(), windows::core::Error> {
+        Ok(())
+    }
+
+    fn OnDeviceAdded(&self, pwstrdeviceid: &PCWSTR) -> Result<(), windows::core::Error> {
+        Ok(())
+    }
+
+    fn OnDeviceRemoved(&self, pwstrdeviceid: &PCWSTR) -> Result<(), windows::core::Error> {
+        Ok(())
+    }
+
+    fn OnDefaultDeviceChanged(
+        &self,
+        flow: EDataFlow,
+        role: ERole,
+        pwstrdefaultdeviceid: &PCWSTR,
+    ) -> Result<(), windows::core::Error> {
+        // TODO: Implement the default device changed event handler
+        // After completed, run the following code to register:
+        // ENUMERATOR.0.RegisterEndpointNotificationCallback(IMMNotificationClient::from(DeviceNotificationClient {}))
+        todo!("Implement the default device changed event handler")
+    }
+
+    fn OnPropertyValueChanged(
+        &self,
+        pwstrdeviceid: &PCWSTR,
+        key: &PROPERTYKEY,
+    ) -> Result<(), windows::core::Error> {
+        Ok(())
+    }
 }
