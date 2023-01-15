@@ -20,13 +20,12 @@ use windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY;
 use super::com;
 use super::{windows_err_to_cpal_err, windows_err_to_cpal_err_message};
 use std::ffi::c_void;
-use windows::core::GUID;
 use windows::core::{implement, Interface, PCWSTR};
+use windows::core::{IntoParam, Param, GUID};
 use windows::Win32::Devices::Properties;
 use windows::Win32::Foundation;
 use windows::Win32::Media::Audio::{
-    EDataFlow, ERole, IAudioRenderClient, IMMNotificationClient,
-    IMMNotificationClient_Impl,
+    EDataFlow, ERole, IAudioRenderClient, IMMNotificationClient, IMMNotificationClient_Impl,
 };
 use windows::Win32::Media::{Audio, KernelStreaming, Multimedia};
 use windows::Win32::System::Com;
@@ -998,6 +997,7 @@ pub fn default_input_device() -> Option<Device> {
 }
 
 pub fn default_output_device() -> Option<Device> {
+    register_imm_notification_client();
     default_device(Audio::eRender, true)
 }
 
@@ -1081,9 +1081,13 @@ fn buffer_duration_to_frames(buffer_duration: i64, sample_rate: u32) -> FrameCou
 }
 
 #[implement(IMMNotificationClient)]
-struct DeviceNotificationClient {}
+struct IMMNotificationClientWrapper {}
 
-impl IMMNotificationClient_Impl for DeviceNotificationClient {
+thread_local! {
+    static IMM_NOTIFICATION_CLIENT: IMMNotificationClient = IMMNotificationClient::from(IMMNotificationClientWrapper {});
+}
+
+impl IMMNotificationClient_Impl for IMMNotificationClientWrapper {
     fn OnDeviceStateChanged(
         &self,
         pwstrdeviceid: &PCWSTR,
@@ -1106,10 +1110,8 @@ impl IMMNotificationClient_Impl for DeviceNotificationClient {
         role: ERole,
         pwstrdefaultdeviceid: &PCWSTR,
     ) -> Result<(), windows::core::Error> {
-        // TODO: Implement the default device changed event handler
-        // After completed, run the following code to register:
-        // ENUMERATOR.0.RegisterEndpointNotificationCallback(IMMNotificationClient::from(DeviceNotificationClient {}))
-        todo!("Implement the default device changed event handler")
+        println!("Device changed");
+        Ok(())
     }
 
     fn OnPropertyValueChanged(
@@ -1118,5 +1120,16 @@ impl IMMNotificationClient_Impl for DeviceNotificationClient {
         key: &PROPERTYKEY,
     ) -> Result<(), windows::core::Error> {
         Ok(())
+    }
+}
+
+fn register_imm_notification_client() {
+    unsafe {
+        IMM_NOTIFICATION_CLIENT.with(|imm_notification_client| {
+            let result = ENUMERATOR
+                .0
+                .RegisterEndpointNotificationCallback(imm_notification_client);
+            println!("Register: {}", result.is_ok());
+        })
     }
 }
